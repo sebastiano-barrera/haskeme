@@ -1,6 +1,8 @@
 module Parser where
 
 import Data
+
+import qualified Data.Map as M
 import Text.ParserCombinators.Parsec hiding (spaces)
 import Text.ParserCombinators.Parsec.Char hiding (spaces)
 
@@ -29,7 +31,8 @@ exprString = do
   return $ ExprString str
 
 exprSymbol = do
-  symbol <- many1 (oneOf "+=_-*/" <|> letter <|> digit)
+  optional (char ':')
+  symbol <- many1 (oneOf "+=_-*/<>" <|> letter <|> digit)
   return $ ExprSymbol symbol
 
 exprQuote = do
@@ -37,14 +40,31 @@ exprQuote = do
   quoted <- expr
   return $ ExprList [ExprSymbol "quote", quoted]
 
+mapKVPair = do
+  k <- expr
+  v <- expr
+  return (k,v)
+
+exprMap = do
+  char '{'
+  kvPairs <- many mapKVPair
+  char '}'
+  return $ ExprMap kvPairs
+
 expr :: GenParser Char () Expr
-expr = spaces >> choice [ exprQuote
-                        , exprList
-                        , exprInt
-                        , exprFloat
-                        , exprString
-                        , exprSymbol -- must be last
-                        ]
+expr = do 
+	spaces 
+	ret <- choice [ exprQuote
+                      , exprMap
+		      , exprList
+		      , try exprFloat
+		      , exprInt
+		      , exprString
+                      , try (string "nil" >> return ExprNil)
+                      , exprSymbol -- must be last
+		      ]
+	spaces
+	return ret
 
 source = many expr
 
