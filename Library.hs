@@ -1,19 +1,29 @@
-module Library where
+module Library
+       ( initLibrary
+       , newStateWithLib
+       ) where
 
 import Prelude hiding (print, div)
 
 import qualified Control.Monad.State as S
 import Data.List (intersperse)
 import Text.Printf (printf)
+import Text.Parsec (parse)
 
+import qualified Parser as P
 import Data
-import Interpreter
+import Eval
+
+simpleError :: String -> Eval Expr
+simpleError msg = do
+  S.lift $ putStrLn msg
+  return ExprNil
 
 numericBinFunc
 	:: (Int -> Int -> Int)
 	-> (Float -> Float -> Float)
 	-> [Expr] 
-	-> Interpreter Expr
+	-> Eval Expr
 numericBinFunc fi ff (ex : ey : _) = 
 	let (ax, ay) = adaptNumPair (ex, ey)
 	in case (ax, ay) of
@@ -22,47 +32,64 @@ numericBinFunc fi ff (ex : ey : _) =
 		(ExprFloat a, ExprFloat b) ->
 			return $ ExprFloat (a `ff` b)
 		_ -> do
-			pushError (Error $ 
-				"Invalid arguments type: "
-				++(typeName ex)++" and "++(typeName ey))
-			return ExprNil
+		  simpleError 
+                     ("Invalid arguments type: "
+		      ++(typeName ex)++" and "++(typeName ey))
+		  return ExprNil
 numericBinFunc _ _ xs = do
-	pushError (Error $ "Invalid argument count: "++(show $ length xs))
+	simpleError ("Invalid argument count: "++(show $ length xs))
 	return ExprNil
 
-div :: [Expr] -> Interpreter Expr
+div :: [Expr] -> Eval Expr
 div (ex : ey : _) = 
     case adaptNumPair (ex, ey) of
       (ExprInt a, ExprInt b) -> return $ ExprFloat (fromIntegral a / fromIntegral b)
       (ExprFloat a, ExprFloat b) -> return $ ExprFloat (a/b)
       _ -> do
-	pushError (Error $ 
-		   "Invalid arguments type: "
-		   ++(typeName ex)++" and "++(typeName ey))
+	simpleError ("Invalid arguments type: "
+		          ++(typeName ex)++" and "++(typeName ey))
 	return ExprNil
 div xs = do
-  pushError (Error $ "Invalid argument count: "++(show $ length xs))
+  simpleError ("Invalid argument count: "++(show $ length xs))
   return ExprNil
 
-libToString :: [Expr] -> Interpreter Expr
-libToString [] = return $ ExprString ""
-libToString xs = return $ ExprString $ concat $ map exprToString xs
+scmToString :: [Expr] -> Eval Expr
+scmToString [] = return $ ExprString ""
+scmToString xs = return $ ExprString $ concatMap exprToString xs
 
-libPrint :: [Expr] -> Interpreter Expr
-libPrint xs = do
+scmPrintLn :: [Expr] -> Eval Expr
+scmPrintLn xs = do
     let string = concat $ map exprToString xs
     S.lift $ putStrLn string
     return $ ExprString string
 
-libGetline :: [Expr] -> Interpreter Expr
-libGetline [] = do
+scmPrint :: [Expr] -> Eval Expr
+scmPrint xs = do
+    let string = concat $ map exprToString xs
+    S.lift $ putStr string
+    return $ ExprString string
+
+scmGetline :: [Expr] -> Eval Expr
+scmGetline [] = do
   str <- S.lift $ getLine
   return (ExprString str)
-libGetline (msg:_) = do
+scmGetline (msg:_) = do
   S.lift $ putStr (exprToString msg)
-  libGetline []
+  scmGetline []
 
-eq :: [Expr] -> Interpreter Expr
+scmRead :: [Expr] -> Eval Expr
+scmRead (ExprString prompt : _) = do
+  S.lift $ putStr prompt
+  scmRead []
+scmRead _ = do
+  text <- S.lift $ getLine
+  case parse P.expr "(input)" text of
+    Right expr -> return expr
+    Left parseErr -> do
+        simpleError (show parseErr)
+        return ExprNil
+
+eq :: [Expr] -> Eval Expr
 eq [] = return ExprNil
 eq (x:[]) = return ExprNil
 eq (x:xs) = 
@@ -70,23 +97,45 @@ eq (x:xs) =
     then return (ExprSymbol "true")
     else return ExprNil
   
+scmEval :: [Expr] -> Eval Expr
+scmEval (x : _) = do
+  withLocalScope $ eval x
 
-lib =	[ ("+", numericBinFunc (+) (+))
-	, ("-", numericBinFunc (-) (-))
-	, ("*", numericBinFunc (*) (*))
-        , ("/", div)
+scmEval [] = return ExprNil
 
-        , ("=", eq)
+scmInspect :: [Expr] -> Eval Expr
+scmInspect _ = do
+  state <- S.get
+  S.lift $ do
+    putStrLn $ "State: " ++ (show state)
+  return ExprNil
 
-        , ("->string", libToString)
+lib = [ ("eval",      scmEval)
 
-        , ("print", libPrint)
-        , ("getline", libGetline)
-	]
+      , ("+",         numericBinFunc (+) (+))
+      , ("-",         numericBinFunc (-) (-))
+      , ("*",         numericBinFunc (*) (*))
+      , ("/",         div)
 
-initLibrary :: Interpreter ()
+      , ("=",         eq)
+
+      , ("->string",  scmToString)
+
+      , ("print",     scmPrint)
+      , ("println",   scmPrintLn)
+      , ("getline",   scmGetline)
+      , ("read",      scmRead)
+
+      , ("inspect-state", scmInspect)
+      ]
+
+initLibrary :: Eval ()
 initLibrary = do
-	S.forM_ lib $ \(name, func) ->
-		define name (ExprFunc $ Function { getFunction = func })
+  S.forM_ lib $ \(name, func) ->
+    define name (ExprFunc $ Function { evalFunc = func })
 
+newStateWithLib :: IO State
+newStateWithLib = do
+  (_, s) <- S.runStateT initLibrary newState
+  return s
 

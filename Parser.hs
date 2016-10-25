@@ -1,4 +1,7 @@
-module Parser where
+module Parser
+       ( source
+       , expr )
+       where
 
 import Data
 
@@ -6,7 +9,13 @@ import qualified Data.Map as M
 import Text.ParserCombinators.Parsec hiding (spaces)
 import Text.ParserCombinators.Parsec.Char hiding (spaces)
 
-spaces = many space
+comment = do
+    char ';'
+    manyTill anyChar (eof <|> (newline >> return ()))
+
+spaces = do
+  many space
+  optional comment
 
 exprList = do
   char '('
@@ -50,21 +59,21 @@ exprMap = do
   kvPairs <- many mapKVPair
   char '}'
   return $ ExprMap kvPairs
-
+  
 expr :: GenParser Char () Expr
-expr = do 
-	spaces 
-	ret <- choice [ exprQuote
-                      , exprMap
-		      , exprList
-		      , try exprFloat
-		      , exprInt
-		      , exprString
-                      , try (string "nil" >> return ExprNil)
-                      , exprSymbol -- must be last
-		      ]
-	spaces
-	return ret
+expr = do -- (eof >> return ExprNil) <|> do 
+  spaces 
+  ret <- choice [ exprQuote
+                , exprMap
+		, exprList
+		, try exprFloat
+		, exprInt
+		, exprString
+                , try (string "nil" >> return ExprNil)
+                , exprSymbol -- must be last
+                ]
+  spaces
+  return ret
 
 source = many expr
 
